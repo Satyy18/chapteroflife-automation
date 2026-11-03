@@ -1,0 +1,56 @@
+
+name: Chapter Of Life - Daily AI Post
+
+on:
+  schedule:
+    - cron: '17 14 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Preview only (true) or publish (false)'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: write
+
+jobs:
+  daily-post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate and publish content
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: python main.py
+
+      - name: Save post history
+        if: success()
+        run: |
+          if [ -d history ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add history/
+            if ! git diff --cached --quiet; then
+              git commit -m "Update post history"
+              git push
+            fi
+          fi
