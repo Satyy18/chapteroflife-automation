@@ -1,56 +1,90 @@
-
 name: Chapter Of Life - Daily AI Post
 
 on:
   schedule:
-    - cron: '17 14 * * *'
+    - cron: '17 14 * * *'  # 7:47 PM IST (may be delayed)
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: 'Preview only (true) or publish (false)'
-        required: false
-        default: 'true'
+      mode:
+        description: 'verify=no post; preview=quote image; publish=LIVE Instagram post'
+        type: choice
+        required: true
+        default: verify
+        options:
+          - verify
+          - preview
+          - publish
+      format:
+        description: 'Content format for preview/publishing'
+        type: choice
+        required: true
+        default: image
+        options:
+          - image
+          - reel
 
 permissions:
   contents: write
+concurrency:
+  group: chapteroflife-publish
+  cancel-in-progress: false
 
 jobs:
   daily-post:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+      CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+      CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+      CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+      IG_GRAPH_VERSION: ${{ vars.IG_GRAPH_VERSION || 'v25.0' }}
+      IG_API_HOST: graph.facebook.com
+      EXPECTED_IG_USERNAME: chapteroflife.__
+      RUN_MODE: ${{ github.event_name == 'schedule' && (vars.AUTOPUBLISH_ENABLED == 'true' && 'publish' || 'preview') || inputs.mode }}
+      POST_FORMAT: ${{ github.event_name == 'schedule' && vars.POST_FORMAT || inputs.format }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install system packages
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-core ffmpeg
+
+      - name: Install Python packages
         run: pip install -r requirements.txt
 
-      - name: Generate and publish content
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
-          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
-          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
-          IG_USER_ID: ${{ secrets.IG_USER_ID }}
-          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
-          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+      - name: Verify / Preview / Publish
         run: python main.py
 
-      - name: Save post history
-        if: success()
+      - name: Save posted-day history
+        if: success() && env.RUN_MODE == 'publish'
         run: |
           if [ -d history ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add history/
             if ! git diff --cached --quiet; then
-              git commit -m "Update post history"
+              git commit -m 'Record published Instagram post'
               git push
             fi
           fi
+
+      - name: Upload image and caption preview
+        if: always() && env.RUN_MODE != 'verify'
+        uses: actions/upload-artifact@v4
+        with:
+          name: chapteroflife-preview
+          path: output/
+          if-no-files-found: ignore
+          retention-days: 7
