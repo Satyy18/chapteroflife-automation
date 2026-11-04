@@ -17,7 +17,10 @@ TOPICS = [
     'Self-Respect & Boundaries', 'Loneliness & Overthinking',
     'Self-Growth & Life Lessons', 'Krishna-inspired philosophical reflection (not a fabricated scripture quote)'
 ]
-DRY = os.getenv('DRY_RUN', 'true').lower() == 'true'
+MODE = os.getenv('RUN_MODE', 'verify').lower()
+if MODE not in ('verify', 'preview', 'publish'):
+    raise ValueError('RUN_MODE must be verify, preview or publish')
+DRY = MODE != 'publish'
 FORMAT = os.getenv('POST_FORMAT', 'image').lower()
 if FORMAT not in ('image', 'reel'):
     raise ValueError('POST_FORMAT must be image or reel')
@@ -141,8 +144,8 @@ def cloudinary_upload(path):
 
 
 def ig(method, route, data=None):
-    version = os.getenv('IG_GRAPH_VERSION','v24.0')
-    host = os.getenv('IG_API_HOST','graph.instagram.com')
+    version = os.getenv('IG_GRAPH_VERSION','v25.0')
+    host = os.getenv('IG_API_HOST','graph.facebook.com')
     base = f'https://{host}/{version}/{route}'
     token = required('IG_ACCESS_TOKEN')
     headers = {'Authorization':f'Bearer {token}'}
@@ -171,8 +174,25 @@ def publish(media_url, caption):
     return result['id']
 
 
+def verify_connection():
+    uid = required('IG_USER_ID').strip()
+    if not uid.isdigit():
+        raise ValueError('IG_USER_ID must be your numeric Instagram professional account ID')
+    user = ig('GET', uid, {'fields': 'id,username'})
+    username = str(user.get('username', '')).lower().lstrip('@')
+    expected = os.getenv('EXPECTED_IG_USERNAME', 'chapteroflife.__').lower().lstrip('@')
+    if str(user.get('id')) != uid or username != expected:
+        raise RuntimeError(f'Instagram account mismatch: API returned @{username}. Expected @{expected}. Publishing blocked.')
+    print(f'Instagram connection verified for @{username}, ID suffix ...{uid[-4:]}')
+    print('Note: This identity check does not prove that content publishing permission is granted.')
+
+
 def main():
-    if MARKER.exists() and not DRY:
+    verify_connection()
+    if MODE == 'verify':
+        print('VERIFY ONLY - no AI generation, upload, or Instagram publishing performed')
+        return
+    if MARKER.exists() and MODE == 'publish':
         print('Post already published today; skipping:', MARKER)
         return
     content = generate_content()
@@ -180,7 +200,7 @@ def main():
     image_path = card(content)
     media_path = video(image_path) if FORMAT == 'reel' else image_path
     if DRY:
-        print('DRY RUN - no media uploaded or Instagram post published')
+        print('PREVIEW - created output/post.jpg; no media uploaded or Instagram post published')
         return
     url = cloudinary_upload(media_path)
     media_id = publish(url, content['caption'])
