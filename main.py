@@ -1,351 +1,341 @@
-"""Chapter Of Life Instagram bot — editorial quality upgrade.
+"""Chapter Of Life Premium Automation v2.
 
-Modes: verify (identity only), preview (local artifact only), publish (real Instagram post).
-Keeps the existing GitHub Secret and repository variable names.
+Modes: verify | preview | publish
+Formats: image | reel
+Free by default: original procedural illustrated scenes, original ambient reel music.
+Optional paid AI image background requires TWO separate explicit environment opt-ins.
 """
+from __future__ import annotations
+import base64
 import hashlib
 import json
 import os
 import re
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from io import BytesIO
 from zoneinfo import ZoneInfo
 
 import requests
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+from premium_visual import render_content
+from music_original import make_original_ambient
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "output"
-OUT.mkdir(exist_ok=True)
+OUT.mkdir(parents=True, exist_ok=True)
 IST = ZoneInfo("Asia/Kolkata")
 TODAY = datetime.now(IST).date().isoformat()
 DOW = datetime.now(IST).weekday()
-TOPICS = [
-    "Love & Relationships", "Human Behaviour", "Friendship",
-    "Self-Respect & Boundaries", "Loneliness & Overthinking",
-    "Self-Growth & Life Lessons",
-    "Krishna-inspired philosophy, ORIGINAL reflection only (never a fabricated scripture quote)",
-]
 MODE = os.getenv("RUN_MODE", "verify").strip().lower()
-FORMAT = os.getenv("POST_FORMAT", "image").strip().lower() or "image"
-if MODE not in ("verify", "preview", "publish"):
-    raise ValueError("RUN_MODE must be verify, preview, or publish")
-if FORMAT not in ("image", "reel"):
-    raise ValueError("POST_FORMAT must be image or reel")
-MARKER = ROOT / "history" / f"{TODAY}.json"
+FORMAT = os.getenv("POST_FORMAT", "image").strip().lower()
+TOPIC_OVERRIDE = os.getenv("TOPIC_OVERRIDE", "auto").strip().lower()
 EXPECTED_USERNAME = os.getenv("EXPECTED_IG_USERNAME", "chapteroflife.__").lower().lstrip("@")
+MARKER = ROOT / "history" / f"{TODAY}.json"
+
+DAY_THEMES = ["love", "self_respect", "human", "overthinking", "friendship", "growth", "spiritual"]
+THEMES = {
+    "love": "Love & Relationships. Warm affection, trust and choosing each other, not clichés.",
+    "self_respect": "Self-Respect & Boundaries. Kind but firm, emotionally nuanced.",
+    "human": "Human Behaviour. Specific insight into subtle everyday behaviour and feelings.",
+    "overthinking": "Loneliness & Overthinking. Gentle late-night insight, not clinical advice.",
+    "friendship": "Friendship & Nostalgia. Old friends, changing routines, genuine care.",
+    "growth": "Self-Growth & Life Lessons. Quiet progress and everyday resilience.",
+    "spiritual": "Original Krishna-inspired philosophical reflection; NEVER pretend it is a Gita quotation.",
+}
 
 
-def required(name):
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise RuntimeError(f"Missing GitHub Secret: {name}")
-    return value
+def required(key):
+    val=os.getenv(key, "").strip()
+    if not val: raise RuntimeError(f"Missing secret: {key}")
+    return val
 
 
 def api_json(response):
     try:
         response.raise_for_status()
         return response.json()
-    except requests.HTTPError as exc:
-        # Never log complete API responses that might contain sensitive information.
-        raise RuntimeError(f"API HTTP {response.status_code}: {response.text[:650]}") from exc
+    except requests.HTTPError as ex:
+        # Prevent accidentally logging secrets in full API URLs / responses.
+        try:
+            msg = str(response.json().get("error",{}).get("message", ""))
+        except (ValueError, AttributeError):
+            msg = ""
+        msg = re.sub(r"(?:Bearer\s+)?[A-Za-z0-9_\-]{75,}", "[REDACTED]", msg)
+        raise RuntimeError(f"API returned HTTP {response.status_code}: {msg[:250]}") from ex
 
 
 def recent_quotes():
-    files = sorted((ROOT / "history").glob("*.json"), reverse=True)[:14]
-    quotes = []
-    for file in files:
+    files=sorted((ROOT / "history").glob("*.json"), reverse=True)[:21]
+    previous=[]
+    for f in files:
         try:
-            q = json.loads(file.read_text(encoding="utf-8")).get("quote")
-            if isinstance(q, str) and q.strip():
-                quotes.append(q.replace("\n", " / "))
-        except (OSError, ValueError):
-            pass
-    return quotes
+            doc=json.loads(f.read_text(encoding='utf-8'))
+            if isinstance(doc.get("quote"), str): previous.append(doc["quote"].replace("\n"," / "))
+        except (OSError, ValueError): pass
+    return previous
 
 
-def build_prompt(feedback=""):
-    previously = recent_quotes()
-    avoidance = "\n".join(f"- {q}" for q in previously) if previously else "No prior published quotes recorded."
-    return f"""You are an outstanding ORIGINAL Hindi micro-poet and careful copy editor for
-Instagram page Chapter Of Life (@chapteroflife.__), audience young Indian Hindi speakers.
-Today's theme: {TOPICS[DOW]}. Date: {TODAY}.
+def writing_prompt(topic, feedback=''):
+    old=recent_quotes()
+    previously='\n'.join('- '+t for t in old) if old else 'None'
+    return f"""You are a Hindi literary editor and a premium Instagram writer for
+Chapter Of Life (@chapteroflife.__). Theme: {THEMES[topic]}. Locale: India.
 
-Write ONE original, emotionally intelligent, deeply relatable thought, easy for a reader
- to SEND TO SOMEONE THEY CARE ABOUT. The insight must be specific, not generic.
-Use authentic conversational Hindi (Devanagari), never stilted translated Hindi.
-Make the FINAL LINE the strongest, a meaningful emotional turn (not preachy).
+Write ONE ORIGINAL Hindi 4-5 line thought that someone would save or share with a close
+friend/partner. Make it specific, emotionally real, and hopeful without fake motivation.
+Use real, idiomatic Devanagari Hindi (not word-by-word English translation).
+The FINAL line must provide an unexpected, memorable emotional turn.
+Strong individual sentences; do not produce a list of moral lessons.
 
-STRUCTURE, STRICTLY:
-- heading: 2-5 evocative Hindi words, no emoji, max 32 characters.
-- quote: EXACTLY 4 or 5 hand-chosen short Hindi lines, separated by newline characters.
-  Each line MUST have at most 35 Unicode characters (count spaces).
-  Total quote length <= 150 characters excluding newlines.
-  Each line should be a natural phrase; NO orphan words (like a single "है," on its own line).
-  Quote MUST read gracefully from beginning to end; keep grammar and pronouns consistent.
-  Don't use filler, clichés, forced rhymes, artificial dialogue or unsupported factual claims.
-  For spiritual themes, write original philosophy, never impersonate Krishna or fabricate Gita verses.
-- caption: 65-110 words ENGLISH, natural relationship/life keywords, one invite-to-comment question,
-  4-7 focused hashtags at the end, no clickbait and no engagement bait.
-- Avoid repetitive ideas (e.g. simply saying 'people change' or 'silence hurts').
+STRICT OUTPUT JSON containing exactly 3 string keys: heading, quote, caption.
+heading: compelling natural Hindi title, 2-5 words, max 29 characters; NO emoji.
+quote: EXACTLY 4 OR 5 short logical Hindi lines with explicit newline separators.
+  Each line max 30 Unicode characters INCLUDING SPACES. Total max 140 chars excluding
+  newlines. Every line must be a phrase, not an orphan 'है' or 'था'. Consistent grammar,
+  cohesive thought across lines; avoid generic vague clichés and repeated comparisons.
+  Avoid excessive punctuation, filler, preachiness, religious misquotations.
+caption: 70-115 words in natural English, relevant search keywords integrated normally,
+  one reflective question, 4-7 appropriate hashtags. No fake claims or aggressive CTAs.
 
-RECENT POSTS TO AVOID REPEATING:
-{avoidance}
-
+Previous already posted content: {previously}
 {feedback}
-Return ONLY a JSON object with exactly three STRING fields: "heading", "quote", "caption".
-No markdown, no code fence, no explanations."""
+Only output valid JSON. No markdown or prefacing."""
 
 
-def quality_check(content):
-    problems = []
-    if not isinstance(content, dict):
-        return ["Output must be a JSON object"]
-    heading = str(content.get("heading", "")).strip()
-    quote = str(content.get("quote", "")).strip()
-    caption = str(content.get("caption", "")).strip()
-    lines = [x.strip() for x in quote.splitlines() if x.strip()]
-    if not heading or len(heading) > 32 or "\n" in heading:
-        problems.append("Heading must be one short Hindi line, maximum 32 characters")
-    if not (4 <= len(lines) <= 5):
-        problems.append("Quote must contain exactly 4 or 5 explicit newline-separated lines")
-    if sum(len(line) for line in lines) > 150:
-        problems.append("Quote total is over 150 characters")
-    if any(len(line) > 35 for line in lines):
-        problems.append("Every quote line must contain 35 characters or fewer")
-    if any(len(line.strip(' ,.।!?…')) < 7 for line in lines):
-        problems.append("Each line must be a meaningful phrase; no orphan words")
-    if len(re.findall(r"[\u0900-\u097f]", quote)) < 25:
-        problems.append("Quote should be natural Hindi in Devanagari")
-    if len(caption.split()) < 45 or len(caption.split()) > 145:
-        problems.append("English caption must be readable, roughly 65-110 words")
-    if caption.count("#") < 4 or caption.count("#") > 8:
-        problems.append("Caption needs 4-7 relevant hashtags")
-    return problems
+def validate(content):
+    errors=[]
+    if not isinstance(content,dict): return ['Gemini did not return a JSON object']
+    heading=str(content.get("heading","")).strip()
+    quote=str(content.get("quote","")).strip()
+    caption=str(content.get("caption","")).strip()
+    lines=[l.strip() for l in quote.splitlines() if l.strip()]
+    if not (4 <= len(lines) <= 5): errors.append('Quote must have 4-5 lines')
+    if not heading or len(heading)>29 or '\n' in heading: errors.append('Heading too long')
+    if len(quote.replace('\n','')) > 140: errors.append('Total quote too long')
+    if any(len(line)>30 for line in lines): errors.append('A quote line exceeds 30 characters')
+    if any(len(line.strip(' ,.!?।…')) < 8 for line in lines): errors.append('Quote has a tiny orphan line')
+    if len(re.findall(r'[\u0900-\u097f]',quote)) < 25: errors.append('Quote should be Hindi in Devanagari')
+    wc=len(caption.split())
+    if not (55 <= wc <= 135): errors.append('Caption word count unexpected')
+    hashtags=caption.count('#')
+    if not 4 <= hashtags <= 7: errors.append('Caption should have 4-7 hashtags')
+    # This is structural review, NOT a guarantee of good poetry.
+    return errors
 
 
-def gemini_request(prompt):
-    key = required("GEMINI_API_KEY")
-    model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip() or "gemini-3.5-flash-lite"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.78},
+def gemini_text(prompt):
+    model=os.getenv('GEMINI_MODEL','gemini-3.5-flash-lite').strip()
+    url=f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
+    payload={
+       'contents':[{'parts':[{'text':prompt}]}],
+       'generationConfig':{'responseMimeType':'application/json','temperature':.78},
     }
-    last_error = None
+    last='unknown'
     for attempt in range(4):
         try:
-            response = requests.post(url, headers={"x-goog-api-key": key}, json=payload, timeout=90)
-            if response.status_code in (429, 500, 502, 503, 504):
-                last_error = f"Gemini temporary HTTP {response.status_code}"
+            res=requests.post(url,headers={'x-goog-api-key':required('GEMINI_API_KEY')},json=payload,timeout=90)
+            if res.status_code in (429,500,502,503,504):
+                last=f'Gemini temporary HTTP {res.status_code}'
                 if attempt < 3:
-                    backoff = (12, 25, 50)[attempt]
-                    print(f"{last_error}; retrying in {backoff}s")
-                    time.sleep(backoff)
+                    seconds=(10,22,42)[attempt]
+                    print(f'{last}; retrying after {seconds} seconds')
+                    time.sleep(seconds)
                     continue
-            data = api_json(response)
-            raw = data["candidates"][0]["content"]["parts"][0]["text"]
-            return json.loads(raw)
-        except (requests.RequestException, ValueError, KeyError, IndexError) as exc:
-            last_error = f"Gemini response problem: {type(exc).__name__}"
+            body=api_json(res)
+            txt=''.join(part.get('text','') for part in body['candidates'][0]['content']['parts'])
+            return json.loads(txt)
+        except (requests.RequestException,ValueError,KeyError,IndexError) as err:
+            last=type(err).__name__
             if attempt < 3:
-                time.sleep((12, 25, 50)[attempt])
-                continue
-    raise RuntimeError(f"Gemini generation failed after retries: {last_error}")
+                time.sleep((10,22,42)[attempt]); continue
+    raise RuntimeError('Text generation failed after retries: '+last)
 
 
-def generate_content():
-    feedback = ""
-    for attempt in range(3):
-        content = gemini_request(build_prompt(feedback))
-        issues = quality_check(content)
-        if not issues:
-            return {key: str(content[key]).strip() for key in ("heading", "quote", "caption")}
-        print(f"Editorial review rejected attempt {attempt+1}: {'; '.join(issues)}")
-        feedback = "Correct these exact issues with a completely REWRITTEN fresh quote: " + "; ".join(issues)
-    raise RuntimeError("AI did not satisfy quality checks after three tries; not publishing a low-quality post")
+def generate_content(topic):
+    feedback=''
+    for i in range(3):
+        obj=gemini_text(writing_prompt(topic,feedback))
+        problems=validate(obj)
+        if not problems:
+            return {key:str(obj[key]).strip() for key in ('heading','quote','caption')}
+        feedback='Fix the following issues by rewriting the quote COMPLETELY: '+ '; '.join(problems)
+        print(f'Editorial validation rejected draft {i+1}: '+ '; '.join(problems))
+    raise RuntimeError('Three attempts failed editorial structure check. No post published.')
 
 
-def font_file(candidates):
-    for path in candidates:
-        if Path(path).exists():
-            return path
-    raise RuntimeError("Missing Devanagari fonts. Workflow must install fonts-noto-core")
+def optionally_generate_paid_background(topic):
+    """Not invoked by default. Requires both controls to avoid surprise charges."""
+    enabled=os.getenv('IMAGE_PROVIDER','free').strip().lower() == 'gemini_paid'
+    explicitly_allowed=os.getenv('ALLOW_PAID_IMAGE_API','false').strip().lower() == 'true'
+    if not enabled: return None
+    if not explicitly_allowed:
+        raise RuntimeError('Paid image provider requested, but ALLOW_PAID_IMAGE_API is not true; no charge attempted.')
+    model=os.getenv('PAID_IMAGE_MODEL','gemini-3.1-flash-lite-image')
+    prompt=(f'Original vertical cinematic illustrated dreamy environment, theme: {THEMES[topic]}. '
+            'Atmospheric sunset, flowering vines, nostalgic city by a river, luminous painterly textures, '
+            'attractive wistful anime-inspired girl seen from behind on RIGHT THIRD, elegant illustration, '
+            'soft depth of field, gentle golden sparkles, high-end editorial artwork. '
+            'Keep the LEFT TWO THIRDS softly atmospheric so a cream paper panel can be overlaid. '
+            'ABSOLUTELY NO TEXT, NO LETTERS, NO WATERMARK, NO LOGOS. 4:5 portrait.')
+    url=f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
+    payload={'contents':[{'parts':[{'text':prompt}]}],
+             'generationConfig':{'responseModalities':['TEXT','IMAGE'],
+                                 'imageConfig':{'aspectRatio':'4:5','imageSize':'1K'}}}
+    res=requests.post(url,headers={'x-goog-api-key':required('GEMINI_API_KEY')},json=payload,timeout=150)
+    body=api_json(res)
+    try:
+        parts=body['candidates'][0]['content']['parts']
+        part=next(p for p in parts if 'inlineData' in p)
+        raw=base64.b64decode(part['inlineData']['data'])
+        img=Image.open(BytesIO(raw)).convert('RGB')
+    except (KeyError,StopIteration,ValueError) as err:
+        raise RuntimeError('Paid image model did not return an image') from err
+    folder=OUT/'generated_backgrounds'; folder.mkdir(exist_ok=True)
+    fp=folder/f'{topic}.jpg'; img.save(fp,'JPEG',quality=94)
+    print('Generated paid AI background by explicit opt-in. Check Gemini billing dashboard.')
+    return folder
 
 
-def render_post(content):
-    """Render a strict four/five-line quote. Never wrap into orphan lines."""
-    W, H = 1080, 1350
-    bg, ink, muted = "#faf9f6", "#2f2e2d", "#807870"
-    accent, accent_light = "#865447", "#f2e9e4"
-    im = Image.new("RGB", (W, H), bg)
-    d = ImageDraw.Draw(im)
-    serif = font_file([
-        "/usr/share/fonts/truetype/noto/NotoSerifDevanagari-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSerifDevanagari-SemiBold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
-    ])
-    sans = font_file([
-        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansDevanagariUI-Regular.ttf",
-    ])
-    latin = font_file([
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ])
-    d.rounded_rectangle((55, 55, 1025, 1295), radius=32, outline="#e1dcd5", width=3)
-    d.text((109, 127), "CHAPTER OF LIFE", font=ImageFont.truetype(latin, 35), fill="#655b54")
-    d.line((109, 193, 971, 193), fill="#e6dfd7", width=2)
-    d.text((109, 220), "कुछ एहसास, कुछ अल्फ़ाज़", font=ImageFont.truetype(sans, 27), fill=muted)
-
-    heading = content["heading"].strip()
-    head_size = 55
-    while head_size >= 37:
-        head_font = ImageFont.truetype(serif, head_size)
-        if d.textlength(heading, font=head_font) <= 855:
-            break
-        head_size -= 2
-    if d.textlength(heading, font=head_font) > 855:
-        raise ValueError("Heading cannot fit without wrapping")
-    d.text((109, 291), heading, font=head_font, fill=accent)
-    d.rounded_rectangle((109, 390, 170, 397), radius=3, fill="#c5a08e")
-
-    lines = [line.strip() for line in content["quote"].strip().splitlines() if line.strip()]
-    font_size = 68
-    while font_size >= 47:
-        quote_font = ImageFont.truetype(serif, font_size)
-        lengths = [d.textlength(line, font=quote_font) for line in lines]
-        if all(length <= 836 for length in lengths):
-            break
-        font_size -= 2
-    if any(length > 836 for length in lengths):
-        raise ValueError("A line is too long for readable card typography")
-    line_step = 110 if font_size >= 60 else 103
-    content_height = (len(lines) - 1) * line_step + 92
-    start_y = 500 + max(0, (540 - content_height) // 2)
-    if start_y + content_height > 1132:
-        raise ValueError("Quote overlaps footer")
-    for i, line in enumerate(lines):
-        y = start_y + i * line_step
-        if i == len(lines)-1:
-            width = d.textlength(line, font=quote_font)
-            d.rounded_rectangle((101, y-8, min(973, 133 + width), y+font_size+33), radius=13, fill=accent_light)
-            d.rectangle((102, y+3, 108, y+font_size+14), fill="#ad7d6b")
-            d.text((122, y), line, font=quote_font, fill=accent)
-        else:
-            d.text((112, y), line, font=quote_font, fill=ink)
-
-    d.line((110, 1179, 970, 1179), fill="#d5cdc4", width=2)
-    d.text((110, 1212), "chapteroflife.__", font=ImageFont.truetype(latin, 28), fill=muted)
-    sig = "~ Sat R."
-    sigfont = ImageFont.truetype(latin, 29)
-    d.text((970-d.textlength(sig, font=sigfont), 1211), sig, font=sigfont, fill=muted)
-    target = OUT / "post.jpg"
-    im.save(target, "JPEG", quality=94, optimize=True)
-    return target
+def render_post(content,topic,kind='image',suffix=''):
+    bgdir=optionally_generate_paid_background(topic)
+    if bgdir is None:
+        bgdir=ROOT/'assets'/'backgrounds'
+    filename='post'+('_'+suffix if suffix else '')+'.jpg'
+    fp=render_content(content,topic,OUT/filename,backgrounds_dir=bgdir)
+    if kind=='reel':
+        reel_fp=OUT/('reel'+('_'+suffix if suffix else '')+'.mp4')
+        reel_cover=OUT/('reel_cover'+('_'+suffix if suffix else '')+'.jpg')
+        render_content(content,topic,reel_cover,1080,1920,backgrounds_dir=bgdir)
+        make_reel(reel_cover,reel_fp)
+        return fp,reel_fp
+    return fp,fp
 
 
-def make_reel(image_path):
-    target = OUT / "reel.mp4"
+def make_reel(image_path, target):
+    """Vertical MP4 with slow zoom and original royalty-free-in-context ambient composition."""
+    music_dir=ROOT/'assets'/'music'
+    candidates=sorted([p for p in music_dir.glob('*') if p.suffix.lower() in ('.mp3','.wav','.m4a')])
+    bgm=candidates[0] if candidates else make_original_ambient(OUT/'original_ambient.wav',12)
+    # The music provided by a user must be owned/licensed for Instagram use.
+    filter_video="scale=1160:2062,crop=1080:1920:(in_w-out_w)/2:(in_h-out_h)/2,format=yuv420p"
     subprocess.run([
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-loop", "1", "-i", str(image_path), "-t", "9",
-        "-vf", "scale=1080:1350,pad=1080:1920:0:285:color=0xfaf9f6,format=yuv420p",
-        "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-        "-movflags", "+faststart", str(target),
-    ], check=True)
+        'ffmpeg','-hide_banner','-loglevel','error','-y',
+        '-loop','1','-framerate','30','-i',str(image_path),
+        '-stream_loop','-1','-i',str(bgm),'-t','12',
+        '-vf',filter_video,'-r','30','-c:v','libx264','-preset','veryfast','-crf','23',
+        '-c:a','aac','-b:a','128k','-shortest','-movflags','+faststart',str(target)
+    ],check=True)
     return target
 
 
-def cloudinary_upload(path):
-    cloud = required("CLOUDINARY_CLOUD_NAME")
-    key = required("CLOUDINARY_API_KEY")
-    secret = required("CLOUDINARY_API_SECRET")
-    timestamp = str(int(time.time()))
-    # Avoid overwriting media accidentally if a manual run is repeated.
-    public_id = f"chapteroflife/{TODAY}-{int(time.time())}-{FORMAT}"
-    params = {"public_id": public_id, "timestamp": timestamp, "overwrite": "false"}
-    signature_text = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + secret
-    signature = hashlib.sha1(signature_text.encode()).hexdigest()
-    kind = "video" if FORMAT == "reel" else "image"
-    with path.open("rb") as fp:
-        response = requests.post(
-            f"https://api.cloudinary.com/v1_1/{cloud}/{kind}/upload",
-            data={**params, "api_key": key, "signature": signature}, files={"file": fp}, timeout=120,
-        )
-    return api_json(response)["secure_url"]
-
-
-def ig(method, route, data=None):
-    version = os.getenv("IG_GRAPH_VERSION", "v25.0")
-    host = os.getenv("IG_API_HOST", "graph.facebook.com")
-    url = f"https://{host}/{version}/{route}"
-    headers = {"Authorization": f"Bearer {required('IG_ACCESS_TOKEN')}"}
-    if method == "GET":
-        return api_json(requests.get(url, params=data, headers=headers, timeout=45))
-    return api_json(requests.post(url, data=data, headers=headers, timeout=45))
+def ig(method,route,data=None):
+    host=os.getenv('IG_API_HOST','graph.facebook.com')
+    version=os.getenv('IG_GRAPH_VERSION','v25.0')
+    headers={'Authorization':'Bearer '+required('IG_ACCESS_TOKEN')}
+    url=f'https://{host}/{version}/{route}'
+    if method=='GET':
+        return api_json(requests.get(url,params=data,headers=headers,timeout=45))
+    return api_json(requests.post(url,data=data,headers=headers,timeout=45))
 
 
 def verify_connection():
-    uid = required("IG_USER_ID")
-    if not uid.isdigit():
-        raise ValueError("IG_USER_ID must be your numeric Instagram professional account ID")
-    user = ig("GET", uid, {"fields": "id,username"})
-    username = str(user.get("username", "")).lower().lstrip("@")
-    if str(user.get("id")) != uid or username != EXPECTED_USERNAME:
-        raise RuntimeError(f"Account mismatch: API @{username}, expected @{EXPECTED_USERNAME}. Publishing blocked.")
-    print(f"Instagram connection verified for @{username}, ID suffix ...{uid[-4:]}")
-    print("Identity verification alone does not establish content-publishing permission.")
+    uid=required('IG_USER_ID')
+    if not uid.isdigit(): raise ValueError('IG_USER_ID must contain the numeric Instagram account ID')
+    user=ig('GET',uid,{'fields':'id,username'})
+    username=str(user.get('username','')).lower().lstrip('@')
+    if username != EXPECTED_USERNAME or str(user.get('id')) != uid:
+        raise RuntimeError(f'Instagram account mismatch! Got @{username} expected @{EXPECTED_USERNAME}.')
+    print('Instagram connection verified for @'+username+ ', ID suffix ...'+uid[-4:])
+    print('Note: identity check does not prove publication permission.')
+
+
+def cloudinary_upload(path,kind):
+    cloud=required('CLOUDINARY_CLOUD_NAME')
+    key=required('CLOUDINARY_API_KEY')
+    secret=required('CLOUDINARY_API_SECRET')
+    timestamp=str(int(time.time()))
+    public_id=f'chapteroflife/{TODAY}-{int(time.time())}-{kind}'
+    args={'public_id':public_id,'timestamp':timestamp,'overwrite':'false'}
+    sig='&'.join(f'{k}={v}' for k,v in sorted(args.items()))+secret
+    signature=hashlib.sha1(sig.encode()).hexdigest()
+    with Path(path).open('rb') as file:
+        resp=requests.post(f'https://api.cloudinary.com/v1_1/{cloud}/{kind}/upload',
+           data={**args,'api_key':key,'signature':signature},files={'file':file},timeout=180)
+    return api_json(resp)['secure_url']
 
 
 def publish(media_url, caption):
-    uid = required("IG_USER_ID")
-    fields = {"caption": caption}
-    if FORMAT == "reel":
-        fields.update({"media_type": "REELS", "video_url": media_url, "share_to_feed": "true"})
-    else:
-        fields["image_url"] = media_url
-    container_id = ig("POST", f"{uid}/media", fields)["id"]
-    for _ in range(18):
-        time.sleep(10 if FORMAT == "reel" else 4)
-        status = ig("GET", container_id, {"fields": "status_code"})["status_code"]
-        print("Instagram media processing:", status)
-        if status == "FINISHED":
-            break
-        if status in ("ERROR", "EXPIRED"):
-            raise RuntimeError("Instagram rejected the media container: " + status)
-    else:
-        raise TimeoutError("Instagram media still processing. No publish attempted.")
-    return ig("POST", f"{uid}/media_publish", {"creation_id": container_id})["id"]
+    uid=required('IG_USER_ID')
+    params={'caption':caption}
+    if FORMAT=='reel':
+        params.update({'media_type':'REELS','video_url':media_url,'share_to_feed':'true'})
+    else: params['image_url']=media_url
+    creation_id=ig('POST',f'{uid}/media',params)['id']
+    for _ in range(30):
+        time.sleep(10 if FORMAT=='reel' else 4)
+        status=ig('GET',str(creation_id),{'fields':'status_code'})['status_code']
+        if status=='FINISHED': break
+        if status in ('ERROR','EXPIRED'): raise RuntimeError('Meta rejected media container: '+status)
+    else: raise TimeoutError('Media container not ready. Did not publish.')
+    return ig('POST',f'{uid}/media_publish',{'creation_id':creation_id})['id']
+
+
+def topics_to_generate():
+    if TOPIC_OVERRIDE=='all':
+        if MODE=='publish': raise ValueError('TOPIC_OVERRIDE=all is preview-only')
+        return ['self_respect','love','overthinking']
+    if TOPIC_OVERRIDE=='auto': return [DAY_THEMES[DOW]]
+    if TOPIC_OVERRIDE not in THEMES: raise ValueError('Unknown topic: '+TOPIC_OVERRIDE)
+    return [TOPIC_OVERRIDE]
+
+
+def process_one(topic,demo=False):
+    if demo:
+        samples={
+            'self_respect':{'heading':'ख़ुद को भी चुनो','quote':'हर बार समझाना ज़रूरी नहीं,\nकभी अपनी ख़ामोशी भी सुनो।\nसबको अपना बना लेना आसान है,\nख़ुद का साथ निभाना सीखो।', 'caption':'Self respect begins when you stop treating your needs as an afterthought. Kindness and boundaries can exist together. You can care for others and still protect your peace. Relationships become healthier when your voice matters too. This is a reminder to honour your emotional space without guilt. Which boundary helped you grow? #SelfRespect #HealthyBoundaries #LifeLessons #InnerPeace #ChapterOfLife'},
+            'love':{'heading':'प्यार की पहचान','quote':'तुम्हारे साथ हँसना अच्छा है,\nपर मेरी उदासी भी सुन लेना।\nप्यार ख़ुशी में साथ भर नहीं,\nमुश्किल दिनों में भी ठहरना है।', 'caption':'A meaningful relationship is not made from perfect photographs. It grows through listening, patience, everyday kindness and emotional trust. Real love allows two people to be honest even when life is difficult. It is about feeling safe while being fully yourself. Real care is found in little ordinary moments, not just celebrations. What makes you feel understood in a relationship? #LoveAndRelationships #EmotionalConnection #Trust #RealLove #ChapterOfLife'},
+            'overthinking':{'heading':'रात के ख़याल','quote':'रात में सब सवाल लौटते हैं,\nजो दिन भर हँसी में छिपाए।\nपर हर जवाब आज नहीं मिलता,\nकुछ सुकून सुबह भी लाती है।', 'caption':'Late night overthinking can make every thought feel urgent. Sometimes the kinder choice is to rest rather than solve your entire life at midnight. Emotional wellbeing also means allowing yourself space to pause. Not every worry deserves an answer tonight. Giving yourself permission to pause is a small act of compassion. What helps you feel calm after a long day? #Overthinking #LateNightThoughts #MentalWellbeing #QuietMoments #ChapterOfLife'},
+        }
+        return samples.get(topic,samples['love'])
+    return generate_content(topic)
 
 
 def main():
-    verify_connection()
-    if MODE == "verify":
-        print("VERIFY ONLY - no AI content generation or publishing")
+    demo='--demo' in sys.argv
+    if not demo: verify_connection()
+    if MODE=='verify' and not demo:
+        print('VERIFY ONLY - nothing generated, uploaded or published')
         return
-    if MARKER.exists() and MODE == "publish":
-        print("Already published today, skipping duplicate:", MARKER)
-        return
-    content = generate_content()
-    (OUT / "content.json").write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
-    (OUT / "caption.txt").write_text(content["caption"] + "\n", encoding="utf-8")
-    image_path = render_post(content)
-    media_path = make_reel(image_path) if FORMAT == "reel" else image_path
-    if MODE == "preview":
-        print("PREVIEW ONLY - generated post.jpg and caption.txt. No upload and no Instagram post.")
-        return
-    media_url = cloudinary_upload(media_path)
-    media_id = publish(media_url, content["caption"])
-    MARKER.parent.mkdir(exist_ok=True)
-    MARKER.write_text(json.dumps({
-        "date": TODAY, "format": FORMAT, "media_id": media_id,
-        "topic": TOPICS[DOW], "quote": content["quote"], "heading": content["heading"],
-    }, indent=2, ensure_ascii=False), encoding="utf-8")
-    print("Successfully published Instagram media, ID suffix:", str(media_id)[-6:])
+    if MODE=='publish':
+        if not (os.getenv('PUBLISH_CONFIRMATION','').strip().upper()=='YES' or
+                os.getenv('AUTOPUBLISH_ENABLED','').strip().lower()=='true'):
+            raise RuntimeError('Live publishing requires explicit confirmation or AUTOPUBLISH_ENABLED=true')
+        if MARKER.exists():
+            print('Already published today, skipping duplicate.'); return
+    topics=topics_to_generate() if not demo else ['self_respect','love','overthinking']
+    for topic in topics:
+        content=process_one(topic,demo=demo)
+        suffix=topic if len(topics)>1 else ''
+        fn='_'+suffix if suffix else ''
+        (OUT/f'content{fn}.json').write_text(json.dumps(content,ensure_ascii=False,indent=2),encoding='utf-8')
+        (OUT/f'caption{fn}.txt').write_text(content['caption']+'\n',encoding='utf-8')
+        image_path,media_path=render_post(content,topic,kind=FORMAT,suffix=suffix)
+        print('Built premium scenic preview:',image_path.name, 'theme:',topic)
+        if MODE=='preview' or demo: continue
+        if MODE=='publish':
+            asset_type='video' if FORMAT=='reel' else 'image'
+            url=cloudinary_upload(media_path,asset_type)
+            media_id=publish(url,content['caption'])
+            MARKER.parent.mkdir(exist_ok=True)
+            MARKER.write_text(json.dumps({'date':TODAY,'format':FORMAT,'media_id':media_id,
+                'theme':topic,'quote':content['quote'],'heading':content['heading']},ensure_ascii=False,indent=2),encoding='utf-8')
+            print('Published successfully, media ID suffix:',str(media_id)[-5:])
+    if MODE=='preview' or demo:
+        print('PREVIEW ONLY — no Cloudinary upload or Instagram publish performed.')
 
 
-if __name__ == "__main__":
-    main()
+if __name__=='__main__': main()
