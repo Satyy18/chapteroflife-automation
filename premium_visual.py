@@ -25,9 +25,16 @@ FONT_DEVANAGARI = [
     "/usr/share/fonts/opentype/noto/NotoSerifDevanagari-Regular.ttf",
 ]
 FONT_DEVANAGARI_BOLD = [
+    # fonts-noto-core on GitHub Ubuntu runners includes Bold faces.
+    "/usr/share/fonts/truetype/noto/NotoSerifDevanagari-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
+    # Additional faces, when fonts-noto-extra is installed.
     "/usr/share/fonts/truetype/noto/NotoSerifDevanagari-SemiBold.ttf",
     "/usr/share/fonts/truetype/noto/NotoSansDevanagari-SemiBold.ttf",
     "/usr/share/fonts/opentype/noto/NotoSerifDevanagari-Bold.ttf",
+    # Safe final fallback; keeps rendering working if a bold font is absent.
+    "/usr/share/fonts/truetype/noto/NotoSerifDevanagari-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
 ]
 FONT_LATIN = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -119,190 +126,3 @@ def scenic_background(width, height, category, variant=1, backgrounds_dir=None):
         for yy0 in range(by-h+8,by-5,13):
             if rng.random()<.65:
                 d.rectangle((x0+3,yy0,x0+5,yy0+3),fill=(255,196,118,160))
-    # Floating lights/bokeh.
-    for _ in range(95):
-        x0,y0=rng.randrange(width),rng.randrange(height)
-        rad=rng.choice((1,2,3,4,7))
-        d.ellipse((x0-rad,y0-rad,x0+rad,y0+rad),fill=(255,219,171,rng.randint(40,145)))
-    # Organic canopy and blossoms along top border.
-    for side in (0,1):
-        anchor_x=0 if side==0 else width
-        for b in range(12):
-            x=anchor_x+ (1 if side==0 else -1)*rng.randrange(0,150)
-            tip_x=x+(1 if side==0 else -1)*rng.randrange(110,310)
-            y0=rng.randrange(-25,80)
-            tip_y=y0+rng.randrange(60,300)
-            d.line([(x,y0),(tip_x,tip_y)],fill=(55,72,52,175),width=rng.randrange(3,8))
-            for k in range(4):
-                t=(k+1)/5
-                bx=x+(tip_x-x)*t
-                by=y0+(tip_y-y0)*t
-                dx=28*(1 if k%2 else -1)
-                d.ellipse((bx-22,by-13,bx+dx+19,by+12),fill=(65+rng.randrange(18),97+rng.randrange(30),56,155))
-                if rng.random()<.8:
-                    blossom(d,bx+rng.randint(-8,12),by+rng.randint(-11,13),rng.randint(7,16),rng)
-    # foreground flowers near bottom sides.
-    for _ in range(45):
-        x=rng.choice((rng.randrange(0,int(width*.23)),rng.randrange(int(width*.7),width)))
-        y=rng.randint(int(height*.86),height+30)
-        blossom(d,x,y,rng.randint(8,26),rng)
-    im=Image.alpha_composite(im.convert('RGBA'),overlay).convert("RGB")
-    return im
-
-
-def blossom(d,x,y,r,rng):
-    shade=rng.choice([(255,215,219,185),(255,229,218,188),(255,237,199,172),(239,190,205,180)])
-    for j in range(5):
-        a=j*math.tau/5
-        px=x+math.cos(a)*r*.57
-        py=y+math.sin(a)*r*.57
-        d.ellipse((px-r*.45,py-r*.45,px+r*.45,py+r*.45),fill=shade)
-    d.ellipse((x-r*.17,y-r*.17,x+r*.17,y+r*.17),fill=(255,186,92,215))
-
-
-def ImageOps_fit(src,size):
-    from PIL import ImageOps
-    return ImageOps.fit(src,size,method=Image.Resampling.LANCZOS,centering=(.60,.5))
-
-
-def anime_silhouette(canvas, category, variant=0):
-    """Painterly character from behind (original vector illustration, not AI-rendered)."""
-    w,h=canvas.size
-    s=w/1080
-    y_off=500 if h==1920 else 0
-    rng=random.Random(seed_for(category,variant)+88)
-    layer=Image.new("RGBA",(w,h),(0,0,0,0)); d=ImageDraw.Draw(layer)
-    def P(points): return [(int(x*s),int((y+y_off)*s)) for x,y in points]
-    def el(b,fill): d.ellipse((int(b[0]*s),int((b[1]+y_off)*s),int(b[2]*s),int((b[3]+y_off)*s)),fill=fill)
-    # window / balustrade foreground
-    d.line(P([(710,1160),(1100,1160)]),fill=(42,40,61,190),width=int(22*s))
-    d.line(P([(777,1158),(777,1400)]),fill=(39,43,58,180),width=int(20*s))
-    # legs, oversized cardigan, long dark hair blowing to the left
-    d.polygon(P([(790,1040),(970,1045),(1120,1310),(1030,1370),(930,1255),(805,1220)]),fill=(57,64,88,238))
-    d.polygon(P([(815,920),(985,880),(1065,1110),(1001,1235),(804,1150),(750,1080)]),fill=(235,199,184,253))
-    d.line(P([(830,960),(814,1110),(1005,1150)]),fill=(211,160,156,240),width=int(14*s),joint='curve')
-    # shoulder arm / hand up to cheek
-    d.polygon(P([(970,965),(1011,988),(985,1080),(950,1070)]),fill=(240,202,181,255))
-    d.polygon(P([(1010,967),(985,922),(1015,897),(1040,926)]),fill=(248,205,182,255))
-    # hair shape / face silhouette
-    d.polygon(P([(875,825),(924,796),(982,810),(1019,848),(1034,905),(1002,969),(955,996),(887,947),(855,873)]),fill=(50,37,50,255))
-    # profile warm face
-    el((958,841,1044,940),(242,190,169,255))
-    d.polygon(P([(1036,884),(1060,897),(1036,908),(1015,941),(996,912)]),fill=(238,188,167,255))
-    # hair front and side flowing
-    d.polygon(P([(865,834),(927,782),(992,787),(1011,815),(992,845),(946,855),(935,907),(956,952),(913,990),(869,1040),(812,1063),(848,987),(817,919)]),fill=(56,38,51,255))
-    d.arc((int(836*s),int((810+y_off)*s),int(1000*s),int((992+y_off)*s)),180,349,fill=(136,93,83,240),width=int(5*s))
-    d.arc((int(854*s),int((819+y_off)*s),int(983*s),int((979+y_off)*s)),172,336,fill=(198,134,100,180),width=int(3*s))
-    # Eyes: lowered and peaceful
-    d.arc((int(1018*s),int((890+y_off)*s),int(1043*s),int((902+y_off)*s)),5,145,fill=(72,52,67,230),width=int(2*s))
-    # little flower hair pin
-    for angle in range(5):
-        a=angle*math.tau/5
-        x=899+14*math.cos(a); y=844+14*math.sin(a)
-        el((x-9,y-9,x+9,y+9),(255,222,221,245))
-    el((892,837,905,849),(244,193,95,255))
-    # soft near-ground glow
-    canvas.alpha_composite(layer)
-
-
-def make_paper_layer(w,h,category):
-    im=Image.new("RGBA",(w,h),(0,0,0,0)); d=ImageDraw.Draw(im)
-    x1,y1,x2,y2= (67,151,723,1195) if h==1350 else (64,285,763,1642)
-    rng=random.Random(seed_for(category,2))
-    points=[]
-    for x in range(x1,x2+1,14): points.append((x,y1+rng.randint(-5,5)))
-    for y in range(y1,y2+1,14): points.append((x2+rng.randint(-5,5),y))
-    for x in range(x2,x1-1,-14): points.append((x,y2+rng.randint(-5,5)))
-    for y in range(y2,y1-1,-14): points.append((x1+rng.randint(-5,5),y))
-    shadow=Image.new("RGBA",(w,h),(0,0,0,0)); sd=ImageDraw.Draw(shadow)
-    sd.polygon([(x+15,y+15) for x,y in points],fill=(20,17,24,110))
-    shadow=shadow.filter(ImageFilter.GaussianBlur(20))
-    im.alpha_composite(shadow)
-    d=ImageDraw.Draw(im)
-    d.polygon(points,fill=(255,248,231,244))
-    d.line(points+[points[0]],fill=(164,130,104,120),width=3,joint='curve')
-    return im,(x1,y1,x2,y2)
-
-
-def draw_stroke(d, x0,y0,x1,y1, fill, seed=1, thickness=31):
-    rng=random.Random(seed)
-    pts=[]
-    for i in range(12):
-        t=i/11; pts.append((int(x0+(x1-x0)*t),int(y0+(y1-y0)*t+rng.uniform(-4,4))))
-    d.line(pts,fill=fill,width=thickness,joint='curve')
-    # jagged transparent overpaint
-    for _ in range(3):
-        yy=y0+rng.randint(-thickness//3,thickness//3)
-        d.line([(x0+8,yy),(x1-10,yy+rng.randint(-5,5))],fill=(*fill[:3], min(130,fill[3])),width=4)
-
-
-def line_font_fit(draw, lines, available_width, max_size=52, min_size=31):
-    for size in range(max_size,min_size-1,-1):
-        ft=font(FONT_DEVANAGARI, size)
-        if all(draw.textbbox((0,0),line,font=ft)[2] <= available_width for line in lines):
-            return ft
-    raise ValueError("Hindi line too long for paper panel. Shorten the text before publishing.")
-
-
-def render_content(content,category,outfile,width=1080,height=1350,backgrounds_dir=None):
-    assert (width,height) in ((1080,1350),(1080,1920))
-    scene=scenic_background(width,height,category,1,backgrounds_dir).convert("RGBA")
-    # When a user supplies a licensed image background, keep that artwork intact.
-    custom_pictures = (bool(backgrounds_dir) and Path(backgrounds_dir).exists() and
-                       any(p.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp')
-                           for p in Path(backgrounds_dir).iterdir()))
-    if not custom_pictures:
-        anime_silhouette(scene,category,1)
-    paper,bounds=make_paper_layer(width,height,category); scene.alpha_composite(paper)
-    d=ImageDraw.Draw(scene)
-    x1,y1,x2,y2=bounds
-    cx=(x1+x2)//2
-    pal=PALETTES.get(category,PALETTES["love"])
-    small=font(FONT_LATIN,24)
-    hi_t=font(FONT_DEVANAGARI_BOLD,44)
-    # Top editorial masthead
-    heading_y=y1+48
-    name='C H A P T E R   O F   L I F E'
-    d.text((cx,heading_y),name,font=small,fill=(114,84,80,255),anchor='ma')
-    d.line((x1+59,heading_y+47,x2-59,heading_y+47),fill=(174,142,130,150),width=2)
-    title=str(content.get('heading','')).strip()
-    for size in range(48,30,-2):
-        hi_t=font(FONT_DEVANAGARI_BOLD,size)
-        if d.textbbox((0,0),title,font=hi_t)[2] < x2-x1-92: break
-    title_y=heading_y+96
-    tw=d.textbbox((0,0),title,font=hi_t)[2]
-    draw_stroke(d,cx-tw//2-13,title_y+53,cx+tw//2+10,title_y+55,(*pal['marker'],170),3,25)
-    d.text((cx,title_y),title,font=hi_t,fill=(66,50,53,255),anchor='ma')
-    sub = 'कुछ एहसास, कुछ अल्फ़ाज़'
-    subft = font(FONT_DEVANAGARI,23)
-    d.text((cx,title_y+98),sub,font=subft,fill=(123,102,99,255),anchor='ma')
-    subw=d.textbbox((0,0),sub,font=subft)[2]
-    d.line((cx-subw//2-45,title_y+110,cx-subw//2-15,title_y+110),fill=(164,121,108,255),width=2)
-    d.line((cx+subw//2+15,title_y+110,cx+subw//2+45,title_y+110),fill=(164,121,108,255),width=2)
-    # Exact AI-provided newlines; never auto-wrap into stray one-word lines.
-    lines=[s.strip() for s in str(content.get('quote','')).splitlines() if s.strip()]
-    if not 4<=len(lines)<=5: raise ValueError('Quote must contain 4 to 5 lines')
-    avail=x2-x1-115
-    body_font=line_font_fit(d,lines,avail,max_size=53 if height==1350 else 58,min_size=30)
-    footer=y2-100
-    qtop=title_y+230
-    qbot=footer-96
-    step=min(101,(qbot-qtop)//(len(lines)-1))
-    if step < 70: raise ValueError('Too much text to fit in card')
-    qstart=qtop+max(0,(qbot-qtop-(len(lines)-1)*step)//2)
-    for n,line in enumerate(lines):
-        ty=qstart+n*step
-        width_text=d.textbbox((0,0),line,font=body_font)[2]
-        if n==len(lines)-1:
-            draw_stroke(d,cx-width_text//2-12,ty+50,cx+width_text//2+16,ty+51,(*pal['marker'],207),19+n,37)
-            linecolor=(89,52,59,255)
-        else:
-            linecolor=(57,48,52,255)
-        d.text((cx,ty),line,font=body_font,fill=linecolor,anchor='ma')
-    d.line((x1+63,footer-24,x2-63,footer-24),fill=(177,145,128,155),width=2)
-    d.text((cx,footer),'chapteroflife.__',font=font(FONT_LATIN,24),fill=(103,81,79,255),anchor='ma')
-    d.text((cx,footer+40),'~ Sat R.',font=font(FONT_LATIN,24),fill=(127,79,87,255),anchor='ma')
-    path=Path(outfile)
-    path.parent.mkdir(parents=True,exist_ok=True)
-    scene.convert('RGB').save(path,'JPEG',quality=93,optimize=True)
-    return path
