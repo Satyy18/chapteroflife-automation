@@ -2,37 +2,58 @@ name: Chapter Of Life - Daily AI Post
 
 on:
   schedule:
-    - cron: '17 14 * * *'  # 7:47 PM IST (may be delayed)
+    - cron: '17 14 * * *' # Scheduled for 7:47 PM IST; GitHub may delay execution
   workflow_dispatch:
     inputs:
       mode:
-        description: 'verify=no post; preview=quote image; publish=LIVE Instagram post'
+        description: 'verify=no posts, preview=artifact, publish=REAL Instagram post'
         type: choice
         required: true
-        default: verify
+        default: preview
         options:
           - verify
           - preview
           - publish
       format:
-        description: 'Content format for preview/publishing'
+        description: 'image post or music Reel'
         type: choice
         required: true
         default: image
         options:
           - image
           - reel
+      topic:
+        description: 'Choose theme; all = 3 preview images'
+        type: choice
+        required: true
+        default: all
+        options:
+          - auto
+          - all
+          - self_respect
+          - love
+          - overthinking
+          - friendship
+          - human
+          - growth
+          - spiritual
+      publish_confirmation:
+        description: 'Type YES only for intentional one-time LIVE publish'
+        type: string
+        default: NO
 
 permissions:
   contents: write
+
 concurrency:
-  group: chapteroflife-publish
+  group: chapteroflife-daily-publishing
   cancel-in-progress: false
 
 jobs:
   daily-post:
+    if: github.event_name != 'schedule' || vars.AUTOPUBLISH_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.5-flash-lite' }}
@@ -44,21 +65,25 @@ jobs:
       IG_GRAPH_VERSION: ${{ vars.IG_GRAPH_VERSION || 'v25.0' }}
       IG_API_HOST: graph.facebook.com
       EXPECTED_IG_USERNAME: chapteroflife.__
-      RUN_MODE: ${{ github.event_name == 'schedule' && (vars.AUTOPUBLISH_ENABLED == 'true' && 'publish' || 'preview') || inputs.mode }}
+      RUN_MODE: ${{ github.event_name == 'schedule' && 'publish' || inputs.mode }}
       POST_FORMAT: ${{ github.event_name == 'schedule' && (vars.POST_FORMAT || 'image') || inputs.format }}
+      TOPIC_OVERRIDE: ${{ github.event_name == 'schedule' && 'auto' || inputs.topic }}
+      PUBLISH_CONFIRMATION: ${{ github.event_name == 'schedule' && 'YES' || inputs.publish_confirmation }}
+      AUTOPUBLISH_ENABLED: ${{ vars.AUTOPUBLISH_ENABLED || 'false' }}
+      IMAGE_PROVIDER: ${{ vars.IMAGE_PROVIDER || 'free' }}
+      ALLOW_PAID_IMAGE_API: ${{ vars.ALLOW_PAID_IMAGE_API || 'false' }}
+      PAID_IMAGE_MODEL: ${{ vars.PAID_IMAGE_MODEL || 'gemini-3.1-flash-lite-image' }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install system packages
+      - name: Install system fonts and FFmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-core ffmpeg
 
       - name: Install Python packages
@@ -80,11 +105,11 @@ jobs:
             fi
           fi
 
-      - name: Upload image and caption preview
+      - name: Upload previews
         if: always() && env.RUN_MODE != 'verify'
         uses: actions/upload-artifact@v4
         with:
-          name: chapteroflife-preview
+          name: chapteroflife-premium-preview
           path: output/
           if-no-files-found: ignore
           retention-days: 7
