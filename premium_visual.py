@@ -94,35 +94,3 @@ def scenic_background(width, height, category, variant=1, backgrounds_dir=None):
     halo=halo.filter(ImageFilter.GaussianBlur(25))
     overlay=Image.alpha_composite(overlay,halo)
     d=ImageDraw.Draw(overlay)
-    d.ellipse((sx-40,sy-40,sx+40,sy+40),fill=(255,241,211,220))
-    # Layered atmospheric mountain silhouettes.
-    base=int(height*.68)
-    for depth,color in [(0,(143,126,152,95)),(1,(*pal['mountain'],150)),(2,(*pal['dark'],205))]:
-        yybase=base+depth*height*.075
-        pts=[(-30,height),(0,yybase)]
-        wave=rng.uniform(0,2*math.pi)
-        for x in range(0,width+20,18):
-            offset=(math.sin(x/91+wave)*33+math.sin(x/49+wave*.6)*16)
-            pts.append((x,int(yybase+offset + rng.uniform(-3,3))))
-        pts.extend([(width+30,height)])
-        d.polygon(pts,fill=color)
-    # reflective riverside and shimmering lights.
-    water_top=int(height*.80)
-    d.polygon([(0,water_top),(width,water_top-28),(width,height),(0,height)],fill=(*pal['dark'],195))
-    for i in range(150):
-        y0=rng.randrange(water_top,height)
-        x0=int(sx+rng.gauss(0,(y0-water_top)*.31+18))
-        if x0 < 0 or x0 >= width: continue
-        ww=rng.randrange(3,48)
-        aa=rng.randrange(30,115)
-        d.line((x0-ww//2,y0,x0+ww//2,y0),fill=(251,206,140,aa),width=rng.choice((1,2,3)))
-    # Tiny distant city/town skyline in evening.
-    for i in range(34):
-        x0=rng.randrange(0,width)
-        by=water_top+rng.randrange(-4,38)
-        h=rng.randint(12,90)
-        w=rng.randint(8,28)
-        d.polygon([(x0,by-h),(x0+w,by-h),(x0+w,by),(x0,by)],fill=(44,46,65,175))
-        for yy0 in range(by-h+8,by-5,13):
-            if rng.random()<.65:
-                d.rectangle((x0+3,yy0,x0+5,yy0+3),fill=(255,196,118,160))
